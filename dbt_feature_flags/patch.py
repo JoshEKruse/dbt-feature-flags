@@ -17,10 +17,13 @@ import os
 import typing as t
 from enum import Enum
 from functools import wraps
+from types import SimpleNamespace
 
 from dbt_feature_flags import base, harness, launchdarkly
 
-_MOCK_CLIENT = object()
+MockClient = t.NewType("MockClient", type(object()))
+
+_MOCK_CLIENT = t.cast(MockClient, object())
 
 
 class SupportedProviders(str, Enum):
@@ -34,7 +37,7 @@ def _is_truthy(value: str) -> bool:
     return value.lower() in ("1", "true", "yes")
 
 
-def _get_client() -> base.BaseFeatureFlagsClient | _MOCK_CLIENT:
+def _get_client() -> base.BaseFeatureFlagsClient | MockClient | None:
     """Return the user specified client.
 
     Valid implementations MUST inherit from BaseFeatureFlagsClient.
@@ -90,16 +93,21 @@ def get_rendered(
             ctx["feature_flag_json"] = client.json_variation
         return fn(string, ctx, node, capture_macros, native)
 
-    _wrapped.status = "patched"
+    _wrapped.status = "patched"  # type: ignore
     return _wrapped
 
 
 def patch_dbt_environment() -> None:
     """Patch dbt's jinja environment to include feature flag functions."""
+    import dbt.flags
     from dbt.clients import jinja
 
-    jinja._get_rendered = jinja.get_rendered
-    jinja.get_rendered = get_rendered(jinja._get_rendered, _get_client())
+    # small patch to make compatible with dbt 1.5+
+    g_flags = getattr(dbt.flags, "get_flags", lambda: SimpleNamespace())
+    g_flags().MACRO_DEBUGGING = False
+
+    jinja._get_rendered = jinja.get_rendered  # type: ignore
+    jinja.get_rendered = get_rendered(jinja._get_rendered, _get_client())  # type: ignore
 
 
 if __name__ == "__main__":
